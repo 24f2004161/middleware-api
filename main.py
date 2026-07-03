@@ -8,6 +8,9 @@ import time
 
 EMAIL = "24f2004161@ds.study.iitm.ac.in"
 
+ALLOWED_ORIGIN = "https://app-g8fsm6.example.com"
+EXAM_ORIGIN = "https://exam.sanand.workers.dev"  # replace if different
+
 RATE_LIMIT = 12
 WINDOW = 10
 
@@ -16,8 +19,8 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://app-g8fsm6.example.com",
-        "https://exam.sanand.workers.dev",   # replace if your exam uses another origin
+        ALLOWED_ORIGIN,
+        EXAM_ORIGIN,
     ],
     allow_credentials=False,
     allow_methods=["*"],
@@ -25,32 +28,30 @@ app.add_middleware(
     expose_headers=["X-Request-ID", "Retry-After"],
 )
 
-# client_id -> timestamps
 buckets = defaultdict(deque)
 
 
 @app.middleware("http")
-async def request_context_and_rate_limit(request: Request, call_next):
+async def middleware(request: Request, call_next):
 
-    # ----------------------------
-    # Request ID
-    # ----------------------------
-    request_id = request.headers.get("X-Request-ID")
-
-    if not request_id:
-        request_id = str(uuid4())
-
+    # -------------------------
+    # Request Context
+    # -------------------------
+    request_id = request.headers.get("X-Request-ID") or str(uuid4())
     request.state.request_id = request_id
 
-    # ----------------------------
-    # Skip OPTIONS
-    # ----------------------------
-    if request.method != "OPTIONS":
+    # -------------------------
+    # Apply rate limiting ONLY
+    # for the assigned origin
+    # -------------------------
+    origin = request.headers.get("Origin")
 
-        client = request.headers.get(
-            "X-Client-Id",
-            "anonymous"
-        )
+    if (
+        request.method != "OPTIONS"
+        and origin == ALLOWED_ORIGIN
+    ):
+
+        client = request.headers.get("X-Client-Id", "anonymous")
 
         now = time.time()
 
@@ -68,9 +69,7 @@ async def request_context_and_rate_limit(request: Request, call_next):
 
             response = JSONResponse(
                 status_code=429,
-                content={
-                    "detail": "Rate limit exceeded"
-                }
+                content={"detail": "Rate limit exceeded"},
             )
 
             response.headers["Retry-After"] = str(retry_after)
@@ -89,7 +88,6 @@ async def request_context_and_rate_limit(request: Request, call_next):
 
 @app.get("/ping")
 async def ping(request: Request):
-
     return {
         "email": EMAIL,
         "request_id": request.state.request_id,
