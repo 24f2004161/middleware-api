@@ -13,7 +13,7 @@ ALLOWED_ORIGINS = [
 ]
 
 RATE_LIMIT = 12
-WINDOW = 10
+WINDOW = 10  # seconds
 
 app = FastAPI()
 
@@ -25,15 +25,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "OPTIONS"],
     allow_headers=["*"],
 )
 
 # -----------------------
-# Rate limiter storage
+# Rate limit storage
 # -----------------------
 
-client_requests = defaultdict(list)
+client_buckets = defaultdict(list)
 
 # -----------------------
 # Request Context Middleware
@@ -50,7 +50,7 @@ async def request_context(request: Request, call_next):
 
     response = await call_next(request)
 
-    # Echo request ID in every response
+    # Always echo request id in response header
     response.headers["X-Request-ID"] = request_id
 
     return response
@@ -61,30 +61,33 @@ async def request_context(request: Request, call_next):
 
 @app.middleware("http")
 async def rate_limiter(request: Request, call_next):
+
+    # Don't rate limit CORS preflight
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     client_id = request.headers.get("X-Client-Id", "anonymous")
 
     now = time.time()
 
-    client_requests[client_id] = [
-        t for t in client_requests[client_id]
-        if now - t < WINDOW
-    ]
+    bucket = client_buckets[client_id]
 
-    if len(client_requests[client_id]) >= RATE_LIMIT:
+    # Remove expired timestamps
+    while bucket and now - bucket[0] >= WINDOW:
+        bucket.pop(0)
+
+    if len(bucket) >= RATE_LIMIT:
         response = JSONResponse(
             status_code=429,
             content={"detail": "Rate limit exceeded"},
         )
 
-        # Ensure X-Request-ID is present even on 429
-        request_id = request.headers.get("X-Request-ID")
-        if not request_id:
-            request_id = str(uuid.uuid4())
+        # Echo request id even on errors
+        response.headers["X-Request-ID"] = request.state.request_id
 
-        response.headers["X-Request-ID"] = request_id
         return response
 
-    client_requests[client_id].append(now)
+    bucket.append(now)
 
     return await call_next(request)
 
