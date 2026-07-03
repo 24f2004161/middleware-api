@@ -8,7 +8,7 @@ import time
 
 EMAIL = "24f2004161@ds.study.iitm.ac.in"
 
-RATE_LIMIT = 12
+RATE_LIMIT = 13
 WINDOW = 10
 
 app = FastAPI()
