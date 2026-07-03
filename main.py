@@ -12,8 +12,7 @@ EMAIL = "24f2004161@ds.study.iitm.ac.in"
 ALLOWED_ORIGINS = [
     "https://app-g8fsm6.example.com",
 
-    # Replace this after opening the exam page
-    "https://YOUR-EXAM-PAGE.com"
+    "https://exam.sanand.workers.dev"
 ]
 
 RATE_LIMIT = 12
