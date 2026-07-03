@@ -1,87 +1,95 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from collections import defaultdict
-import uuid
+from collections import defaultdict, deque
+from uuid import uuid4
+from math import ceil
 import time
 
 EMAIL = "24f2004161@ds.study.iitm.ac.in"
 
-ALLOWED_ORIGINS = [
-    "https://app-g8fsm6.example.com",
-    "https://exam.sanand.workers.dev",
-]
-
 RATE_LIMIT = 12
-WINDOW = 10  # seconds
+WINDOW = 10
 
 app = FastAPI()
 
-# -----------------------
-# CORS
-# -----------------------
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=[
+        "https://app-g8fsm6.example.com",
+        "https://exam.sanand.workers.dev",   # replace if your exam uses another origin
+    ],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=False,
+    expose_headers=["X-Request-ID", "Retry-After"],
 )
 
-# -----------------------
-# Rate limit storage
-# -----------------------
+# client_id -> timestamps
+buckets = defaultdict(deque)
 
-client_requests = defaultdict(list)
-
-# -----------------------
-# Request Context + Rate Limiter
-# -----------------------
 
 @app.middleware("http")
-async def middleware(request: Request, call_next):
+async def request_context_and_rate_limit(request: Request, call_next):
+
+    # ----------------------------
     # Request ID
+    # ----------------------------
     request_id = request.headers.get("X-Request-ID")
+
     if not request_id:
-        request_id = str(uuid.uuid4())
+        request_id = str(uuid4())
 
     request.state.request_id = request_id
 
-    # Skip rate limiting for preflight
+    # ----------------------------
+    # Skip OPTIONS
+    # ----------------------------
     if request.method != "OPTIONS":
-        client_id = request.headers.get("X-Client-Id", "anonymous")
+
+        client = request.headers.get(
+            "X-Client-Id",
+            "anonymous"
+        )
+
         now = time.time()
 
-        # Remove expired requests
-        client_requests[client_id] = [
-            t for t in client_requests[client_id]
-            if now - t < WINDOW
-        ]
+        bucket = buckets[client]
 
-        if len(client_requests[client_id]) >= RATE_LIMIT:
+        while bucket and now - bucket[0] >= WINDOW:
+            bucket.popleft()
+
+        if len(bucket) >= RATE_LIMIT:
+
+            retry_after = max(
+                1,
+                ceil(WINDOW - (now - bucket[0]))
+            )
+
             response = JSONResponse(
                 status_code=429,
-                content={"detail": "Rate limit exceeded"},
+                content={
+                    "detail": "Rate limit exceeded"
+                }
             )
+
+            response.headers["Retry-After"] = str(retry_after)
             response.headers["X-Request-ID"] = request_id
+
             return response
 
-        client_requests[client_id].append(now)
+        bucket.append(now)
 
     response = await call_next(request)
 
-    # Echo request ID in every response
     response.headers["X-Request-ID"] = request_id
 
     return response
 
-# -----------------------
-# Endpoint
-# -----------------------
 
 @app.get("/ping")
 async def ping(request: Request):
+
     return {
         "email": EMAIL,
         "request_id": request.state.request_id,
